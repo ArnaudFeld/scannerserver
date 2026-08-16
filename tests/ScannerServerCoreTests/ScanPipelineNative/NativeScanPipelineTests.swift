@@ -446,6 +446,37 @@ struct NativeScanPipelineTests {
         }
         #expect(!FileManager.default.fileExists(atPath: fixture.work.path))
     }
+
+    @Test("Grouped layout nests the scan workspace under .scan-work and keeps the parent")
+    func groupedWorkDirectoryLayout() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let groupedWork = fixture.output.appendingPathComponent(".scan-work", isDirectory: true)
+            .appendingPathComponent("deterministic", isDirectory: true)
+        let groupedParent = fixture.output.appendingPathComponent(".scan-work", isDirectory: true)
+        let executor = FakeNativeScanProcessExecutor(stubs: [])
+        let wifiAcquirer = FakeScanSnapWiFiAcquirer(stubs: [.suspended])
+        let pipeline = fixture.pipeline(executor: executor, wifiAcquirer: wifiAcquirer)
+        let configuration = fixture.configuration([
+            "SCAN_BACKEND": "wifi",
+            "SCAN_TIMESTAMP": "2026-07-10.142314",
+            "SCANNER_IP": "192.0.2.20",
+            "SCANSNAP_PAIRING_KEY": "pairing-key",
+            "SCAN_WORK_DIRECTORY_LAYOUT": "grouped",
+        ])
+        let task = Task { try await pipeline.scan(configuration: configuration) }
+
+        await wifiAcquirer.waitForRequest()
+        #expect(FileManager.default.fileExists(atPath: groupedWork.path))
+        #expect(!FileManager.default.fileExists(atPath: fixture.work.path))
+        task.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
+        #expect(!FileManager.default.fileExists(atPath: groupedWork.path))
+        #expect(FileManager.default.fileExists(atPath: groupedParent.path))
+    }
 }
 
 private struct Fixture {

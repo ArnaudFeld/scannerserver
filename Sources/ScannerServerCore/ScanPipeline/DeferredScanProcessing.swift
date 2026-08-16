@@ -30,13 +30,11 @@ public struct DeferredScanProcessing: Equatable, Sendable {
         let workDirectory = plan.workingDirectory?
             .resolvingSymlinksInPath()
             .standardizedFileURL
-        let workDirectoryName = cleanup.lastPathComponent
 
-        guard workDirectoryName.hasPrefix(".scan-work."),
-              workDirectoryName.count > ".scan-work.".count,
-              input.lastPathComponent == "raw.pdf",
+        guard input.lastPathComponent == "raw.pdf",
               input.deletingLastPathComponent() == cleanup,
-              workDirectory == cleanup
+              workDirectory == cleanup,
+              Self.outputDirectory(forWorkDirectory: cleanup) != nil
         else {
             return "Deferred scan processing has an invalid work-directory scope."
         }
@@ -54,10 +52,24 @@ public struct DeferredScanProcessing: Equatable, Sendable {
         let outputDirectory = URL(fileURLWithPath: finalOutputDirectory, isDirectory: true)
             .resolvingSymlinksInPath()
             .standardizedFileURL
-        guard outputDirectory == cleanup.deletingLastPathComponent()
+        guard outputDirectory == Self.outputDirectory(forWorkDirectory: cleanup)
             || (ocrOnly && outputDirectory == cleanup)
         else {
             return "Deferred scan processing references an unexpected output directory."
+        }
+        return nil
+    }
+
+    /// Returns the scan output directory that a work directory belongs to, or `nil`
+    /// when the path does not have a recognized work-directory shape. Accepts both
+    /// the flat `.scan-work.<UUID>` form and the grouped `.scan-work/<UUID>/` form.
+    static func outputDirectory(forWorkDirectory workDirectory: URL) -> URL? {
+        let name = workDirectory.lastPathComponent
+        if name.hasPrefix(".scan-work."), name.count > ".scan-work.".count {
+            return workDirectory.deletingLastPathComponent()
+        }
+        if workDirectory.deletingLastPathComponent().lastPathComponent == ".scan-work" {
+            return workDirectory.deletingLastPathComponent().deletingLastPathComponent()
         }
         return nil
     }
@@ -72,8 +84,9 @@ public struct DeferredScanProcessing: Equatable, Sendable {
     func publishRawPDFFallback() {
         guard ocrOnly, validationError == nil, let rawFallbackName else { return }
         guard FileManager.default.fileExists(atPath: inputPath) else { return }
-        let destination = cleanupDirectory.deletingLastPathComponent()
-            .appendingPathComponent(rawFallbackName)
+        let cleanup = cleanupDirectory.resolvingSymlinksInPath().standardizedFileURL
+        guard let outputDirectory = Self.outputDirectory(forWorkDirectory: cleanup) else { return }
+        let destination = outputDirectory.appendingPathComponent(rawFallbackName)
         try? FoundationNativeScanFileSystem().placeFileExclusively(
             at: URL(fileURLWithPath: inputPath),
             destination: destination

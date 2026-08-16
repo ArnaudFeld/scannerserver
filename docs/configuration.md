@@ -99,6 +99,7 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | `SCAN_PAGE_MODE` | `multi` | `multi` for one multipage PDF, `single` for one PDF per page |
 | `SCAN_OCR_ENABLED` | `true` | Queue OCR for PDF output after scanning |
 | `SCAN_OCR_ONLY` | `true` | Publish only the OCR result for PDF scans. The raw PDF stays in the private scan workspace and is deleted after OCR succeeds; on OCR/processing failure it is published as a fallback, while cancellation publishes nothing. PNG output and imported PDFs are unaffected |
+| `SCAN_WORK_DIRECTORY_LAYOUT` | `flat` | Layout of the private scan workspace inside `SCAN_OUTPUT_DIR`. `flat` (default) creates one `.scan-work.<UUID>` directory per scan, exactly as before. `grouped` collects every scan's workspace under a single persistent `.scan-work/<UUID>/` directory; page-OCR staging moves to `.ocr-work/<UUID>/` and PDF imports to `.pdf-import-work/<UUID>/` |
 | `SCAN_OCR_CPU_LIMIT` | detected CPUs minus one | Optional positive cap on CPUs used by background page processing and OCR; values above the background allowance are clamped |
 | `SCAN_OCR_NICE` | `false` | Run post-scan document-processing subprocesses with reduced CPU scheduling priority |
 | `SCAN_OCR_NICE_LEVEL` | `10` | Nice increment from `1` through `19` when `SCAN_OCR_NICE` is enabled |
@@ -143,6 +144,12 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 
 `SCANSNAP_BUTTON_REGISTRATION_INTERVAL_SECONDS` remains accepted as a compatibility alias for
 `SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` when the current variable is absent.
+
+With `SCAN_WORK_DIRECTORY_LAYOUT=grouped` all scan-internal work is grouped under one persistent
+`.scan-work/` directory in the output directory. The per-scan subdirectories are removed after
+processing; the `.scan-work` parent itself stays. Tools that watch the output directory and ingest
+finished scans — for example Paperless-ngx — can then exclude all scan-internal files with a single
+rule on `.scan-work/`, instead of having to match per-scan `.scan-work.<UUID>` names.
 
 ## Background Processing CPU Scheduling And Priority
 

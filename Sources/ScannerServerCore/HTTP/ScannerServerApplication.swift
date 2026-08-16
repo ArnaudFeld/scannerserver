@@ -528,10 +528,20 @@ public enum ScannerServerApplication {
             environment["SCAN_FORMAT"] = "pdf"
             environment["SCAN_PAGE_MODE"] = "multi"
             environment["SCAN_OCR_ENABLED"] = "true"
-            let workDirectory = outputDirectory.appendingPathComponent(
-                ".pdf-import-work.\(UUID().uuidString)",
-                isDirectory: true
-            )
+            let importID = UUID().uuidString
+            let workDirectory: URL
+            switch WorkDirectoryLayout.from(environment: dependencies.environment) {
+            case .flat:
+                workDirectory = outputDirectory.appendingPathComponent(
+                    ".pdf-import-work.\(importID)",
+                    isDirectory: true
+                )
+            case .grouped:
+                workDirectory = outputDirectory.appendingPathComponent(
+                    ".pdf-import-work",
+                    isDirectory: true
+                ).appendingPathComponent(importID, isDirectory: true)
+            }
             let pageCount: Int
             do {
                 pageCount = try await dependencies.ocrQueue.enqueueImportedPDF(

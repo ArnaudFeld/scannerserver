@@ -77,7 +77,10 @@ persisted stores, reachability, and physical-button session state.
   workers cannot oversubscribe the scanner host. When reduced priority is enabled, the queue applies the
   configured nice level to every external document-processing subprocess; the service and scanner
   acquisition remain at normal priority. The queue exposes aggregate running/queued state, targeted
-  cancellation, and recent jobs.
+  cancellation, and recent jobs. The scan workspace is a private directory below the output directory.
+  Its layout is configurable via `SCAN_WORK_DIRECTORY_LAYOUT`: the default `flat` mode creates one
+  `.scan-work.<UUID>` per scan, while `grouped` collects all workspaces under a persistent
+  `.scan-work/` directory so external ingest tools can exclude them with one rule.
 - For OCR-enabled multipage ScanSnap Wi-Fi scans, acquisition calls the queue after every accepted
   JPEG side. The queue immediately creates and schedules a one-page PDF, owns the private scan
   workspace (retaining the raw PDF there under `SCAN_OCR_ONLY`), receives each remote result

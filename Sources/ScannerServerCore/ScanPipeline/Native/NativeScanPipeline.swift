@@ -48,17 +48,27 @@ public actor NativeScanPipeline: NativeScanExecuting {
             return failure(status: 1, message: "Could not create scan output directory: \(error.localizedDescription)")
         }
 
+        let layout = WorkDirectoryLayout.from(environment: environment)
         let suffix = workDirectorySuffixProvider()
         guard isValidPathComponent(suffix) else {
             return failure(status: 64, message: "Invalid native scan work-directory suffix.")
         }
-        let workDirectory = outputDirectory.appendingPathComponent(
-            ".scan-work.\(suffix)",
-            isDirectory: true
-        )
+        let workDirectory: URL
+        switch layout {
+        case .flat:
+            workDirectory = outputDirectory.appendingPathComponent(
+                ".scan-work.\(suffix)",
+                isDirectory: true
+            )
+        case .grouped:
+            workDirectory = outputDirectory.appendingPathComponent(
+                ".scan-work",
+                isDirectory: true
+            ).appendingPathComponent(suffix, isDirectory: true)
+        }
 
         do {
-            try fileSystem.createDirectory(at: workDirectory, withIntermediateDirectories: false)
+            try fileSystem.createDirectory(at: workDirectory, withIntermediateDirectories: true)
         } catch {
             return failure(status: 1, message: "Could not create scan work directory: \(error.localizedDescription)")
         }

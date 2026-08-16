@@ -517,6 +517,62 @@ struct OCRQueueActorTests {
         #expect(await queue.state.output == output.path)
     }
 
+    @Test("Grouped preprocessing nests the isolated workspace under .ocr-work")
+    func groupedIsolatedPreprocessing() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ocr-queue-grouped-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let input = root.appendingPathComponent("scan.pdf")
+        let output = root.appendingPathComponent("scan.ocr.pdf")
+        let workspace = root.appendingPathComponent(".ocr-work", isDirectory: true)
+            .appendingPathComponent("test", isDirectory: true)
+        let stagedInput = workspace.appendingPathComponent("source.pdf")
+        try Data("raw source".utf8).write(to: input)
+
+        let executor = FakeProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            workspaceSuffixProvider: { "test" },
+            configuration: serialOCRConfiguration
+        )
+
+        await queue.enqueue(
+            input.path,
+            environment: [
+                "SCAN_LANGUAGE": "eng",
+                "SCAN_WORK_DIRECTORY_LAYOUT": "grouped",
+            ],
+            removeBlankPages: true,
+            cropPages: true
+        )
+        await queue.waitUntilIdle()
+
+        let requests = await executor.requests()
+        #expect(requests.map(\.executable) == [
+            "remove-blank-pages", "crop-pdf-pages", "ocrmypdf",
+        ])
+        #expect(requests[0].arguments.first == stagedInput.path)
+        #expect(requests[1].arguments.first == stagedInput.path)
+        #expect(requests[2].arguments == ocrArguments(
+            input: stagedInput.path,
+            output: output.path,
+            language: "eng"
+        ))
+        #expect(requests.allSatisfy { $0.workingDirectory == workspace })
+        #expect(try Data(contentsOf: input) == Data("raw source".utf8))
+        #expect(!FileManager.default.fileExists(atPath: workspace.path))
+        #expect(await queue.state.status == "done")
+        #expect(await queue.state.output == output.path)
+    }
+
     @Test("Processing-only jobs replace the source without launching OCR")
     func processingOnly() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -868,6 +924,88 @@ struct OCRQueueActorTests {
         #expect(try Data(contentsOf: fallbackPage1) == Data("page one".utf8))
         #expect(try Data(contentsOf: ocrPage2) == Data("ocr two".utf8))
         #expect(!FileManager.default.fileExists(atPath: work.path))
+        let state = await queue.state
+        #expect(state.recentJobs.contains { $0.status == "failed (3)" })
+    }
+
+    @Test("Grouped OCR-only fallback publishes the raw page into the output directory")
+    func deferredOCROnlyGroupedFallbackPublishesRawPageIntoOutputDirectory() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "deferred-ocr-only-grouped-fallback-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work", isDirectory: true)
+            .appendingPathComponent("test", isDirectory: true)
+        let input = work.appendingPathComponent("raw.pdf")
+        let prefix = "2026-08-13.205342"
+        let rawPage1 = work.appendingPathComponent("\(prefix)-page-0001.pdf")
+        let rawPage2 = work.appendingPathComponent("\(prefix)-page-0002.pdf")
+        let fallbackPage1 = root.appendingPathComponent("\(prefix)-page-0001.pdf")
+        let ocrPage2 = root.appendingPathComponent("\(prefix)-page-0002.ocr.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try Data("raw source".utf8).write(to: input)
+
+        let executor = FakeNativeScanProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 0)),
+            .materialize(
+                files: [
+                    rawPage1.path: Data("page one".utf8),
+                    rawPage2.path: Data("page two".utf8),
+                ],
+                result: ProcessResult(
+                    exitStatus: 0,
+                    standardOutput: "\(rawPage1.path)\n\(rawPage2.path)\n"
+                )
+            ),
+            .result(ProcessResult(exitStatus: 3, standardError: "tesseract failed\n")),
+            .materialize(
+                files: [ocrPage2.path: Data("ocr two".utf8)],
+                result: ProcessResult(exitStatus: 0, standardOutput: "\(ocrPage2.path)\n")
+            ),
+        ])
+        let plan = DocumentProcessingPlan(
+            creatorMetadata: SetPDFCreatorRequest(pdfPath: input.path),
+            finalOutput: .splitPDF(SplitPDFPagesRequest(
+                pdfPath: input.path,
+                outputDirectory: work.path,
+                prefix: try ScanTimestamp(rawValue: prefix)
+            )),
+            environment: ["SCAN_LANGUAGE": "eng"],
+            workingDirectory: work
+        )
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: serialOCRConfiguration
+        )
+
+        await queue.enqueue(DeferredScanProcessing(
+            inputPath: input.path,
+            cleanupDirectory: work,
+            plan: plan,
+            ocrEnabled: true,
+            ocrOnly: true
+        ))
+        await queue.waitUntilIdle()
+
+        let requests = await executor.requests()
+        #expect(requests.map(\.executable) == [
+            "set-pdf-creator",
+            "split-pdf-pages",
+            "ocrmypdf",
+            "ocrmypdf",
+        ])
+        guard requests.count == 4 else { return }
+        #expect(FileManager.default.fileExists(atPath: fallbackPage1.path))
+        #expect(try Data(contentsOf: fallbackPage1) == Data("page one".utf8))
+        #expect(try Data(contentsOf: ocrPage2) == Data("ocr two".utf8))
+        #expect(!FileManager.default.fileExists(atPath: work.path))
+        #expect(!FileManager.default.fileExists(
+            atPath: work.deletingLastPathComponent()
+                .appendingPathComponent("\(prefix)-page-0001.pdf").path
+        ))
+        #expect(FileManager.default.fileExists(atPath: work.deletingLastPathComponent().path))
         let state = await queue.state
         #expect(state.recentJobs.contains { $0.status == "failed (3)" })
     }

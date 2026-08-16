@@ -1105,13 +1105,18 @@ public actor OCRQueueActor {
             throw OCRWorkspaceError.invalidSuffix
         }
         let inputURL = URL(fileURLWithPath: job.inputPath, isDirectory: false)
-        let workspace = inputURL.deletingLastPathComponent().appendingPathComponent(
-            ".ocr-work.\(suffix)",
-            isDirectory: true
-        )
+        let parent = inputURL.deletingLastPathComponent()
+        let workspace: URL
+        switch WorkDirectoryLayout.from(environment: job.environment ?? [:]) {
+        case .flat:
+            workspace = parent.appendingPathComponent(".ocr-work.\(suffix)", isDirectory: true)
+        case .grouped:
+            workspace = parent.appendingPathComponent(".ocr-work", isDirectory: true)
+                .appendingPathComponent(suffix, isDirectory: true)
+        }
         let stagedInput = workspace.appendingPathComponent("source.pdf", isDirectory: false)
         let fileManager = FileManager.default
-        try fileManager.createDirectory(at: workspace, withIntermediateDirectories: false)
+        try fileManager.createDirectory(at: workspace, withIntermediateDirectories: true)
         defer { try? fileManager.removeItem(at: workspace) }
         try fileManager.copyItem(at: inputURL, to: stagedInput)
 
@@ -1270,7 +1275,9 @@ public actor OCRQueueActor {
                         workerMetadata: nil,
                         streamingPageNumber: nil,
                         outputDirectory: deferredProcessing.ocrOnly
-                            ? deferredProcessing.cleanupDirectory.deletingLastPathComponent().path
+                            ? DeferredScanProcessing.outputDirectory(
+                                forWorkDirectory: deferredProcessing.cleanupDirectory
+                            )?.path
                             : nil
                     )
                 }
